@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>frogger engine</title>
+<style>
+html,body{
+  margin:0;
+  background:#111;
+}
+canvas{
+  display:block;
+  margin:auto;
+  image-rendering: pixelated;
+}
+</style>
+<style>
+  
+#dpad {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 350px;
+  height: 350px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  gap: 4px;
+  touch-action: none;
+}
+.dpad-btn {
+  background: rgba(255,255,255,0.2);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.dpad-btn:active {
+  background: rgba(255,0,0,0.4);
+}
+@media (hover: hover) and (pointer: fine) {
+  #dpad {
+    display: none;
+  }
+}
+
+</style>
+
+<div id="dpad">
+  <div></div><div class="dpad-btn" data-key="ArrowUp">↑</div><div></div>
+  <div class="dpad-btn" data-key="ArrowLeft">←</div><div></div><div class="dpad-btn" data-key="ArrowRight">→</div>
+  <div></div><div class="dpad-btn" data-key="ArrowDown">↓</div><div></div>
+</div>
+
+<script>
+/* on screen control*/
+document.querySelectorAll(".dpad-btn").forEach(btn=>{
+  btn.addEventListener("touchstart",e=>{
+    const key = btn.dataset.key;
+    keys[key] = false; // force allow
+    document.dispatchEvent(new KeyboardEvent("keydown",{key:key}));
+  });
+  btn.addEventListener("touchend",e=>{
+    const key = btn.dataset.key;
+    document.dispatchEvent(new KeyboardEvent("keyup",{key:key}));
+  });
+});
+</script>
+
+</head>
+<body>
+
+<canvas id="game" width="320" height="320" style="width:960px; height:960px;"></canvas>
+
+<script>
+let score = 0;
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const TILE = 16;
+const COLS = canvas.width / TILE;
+const ROWS = canvas.height / TILE;
+
+/* helpers */
+function load(src){
+  const i = new Image();
+  i.src = src;
+  return i;
+}
+
+/* sprites */
+const frogImg     = load("./sprite/frog.png");
+const frogDeadImg = load("./sprite/frogded.png");
+const grassImg    = load("./sprite/grass.png");
+const roadUpImg   = load("./sprite/roadup.png");
+const roadDownImg = load("./sprite/roaddown.png");
+const truckImg    = load("./sprite/truckrf.png");
+const treeImg     = load("./sprite/tree.png");
+const water1Img   = load("./sprite/water1.png");
+const water2Img   = load("./sprite/water2.png");
+const log1Img     = load("./sprite/logv1.png");
+const log2Img     = load("./sprite/logv2.png");
+const rockImg     = load("./sprite/rock1.png");
+const gurasu      = load("./sprite/grass1.png")
+
+/* frog */
+const frog = {
+  x: Math.floor(COLS/2),
+  y: ROWS-3,
+  dead:false
+};
+
+let highestY = frog.y;
+let camY = 0;
+let waterFrame = 0;
+let frogOnLog = null;
+
+setInterval(()=>waterFrame ^= 1, 600);
+
+function resetFrog(){
+  frog.dead = true;
+
+  // make the spawn row safe grass
+  const spawnRow = ROWS-3;
+  world[spawnRow] = genRow(true);
+
+  setTimeout(()=>{
+    score = 0;
+    frog.x = Math.floor(COLS/2);
+    frog.y = spawnRow;
+    highestY = frog.y;
+    camY = 0;
+    frog.dead = false;
+    frogOnLog = null;
+  },300);
+}
+
+/* world */
+const world = [];
+
+function genRow(forceGrass=false, prevRow=null){
+  const r = Math.random();
+
+  if(!forceGrass && r < 0.2){
+    return {
+      type:"road",
+      dir: Math.random()<0.5 ? -1 : 1,
+      cars: Array.from({length:COLS},()=>Math.random()<0.15)
+    };
+  }
+
+  if(!forceGrass && r < 0.35){
+    let dir = Math.random()<0.5 ? -1 : 1;
+
+    if(prevRow && prevRow.type==="water"){
+      dir = -prevRow.dir; // flip direction
+    }
+
+    // generate empty logs first
+let logs = Array.from({length:COLS},()=>null);
+
+// ensure at least one 2-tile log
+const start = Math.floor(Math.random()*(COLS-1)); // starting x
+logs[start] = {v:2};
+logs[start+1] = {v:2};
+
+// optionally add some extra random logs
+for(let x=0;x<COLS;x++){
+  if(!logs[x] && Math.random()<0.15){
+    logs[x] = {v: Math.random()<0.5?1:2};
+  }
+}
+
+return {
+  type:"water",
+  dir: dir,
+  logs: logs
+};
+
+  }
+
+  return {
+    type:"grass",
+    trees: Array.from({length:COLS},()=>Math.random()<0.03),
+      rocks: Array.from({length:COLS},()=>Math.random()<0.05),
+
+
+  };
+}
+
+// init world
+for(let i=0;i<ROWS*3;i++){
+  const prevRow = world.length ? world[world.length-1] : null;
+  world.push(genRow(false, prevRow));
+}
+
+/* input */
+const keys = {};
+document.addEventListener("keydown",e=>{
+  if(keys[e.key] || frog.dead) return;
+  keys[e.key]=true;
+
+  let nx=frog.x, ny=frog.y;
+
+  if(e.key==="ArrowLeft") nx--;
+  if(e.key==="ArrowRight") nx++;
+  if(e.key==="ArrowDown") ny++;
+  if(e.key==="ArrowUp") ny--;
+
+  if(nx<0||nx>=COLS||ny<0||ny>=world.length) return;
+
+  const row = world[ny];
+  if(row.type==="grass" && row.trees[nx]) return;
+
+  frog.x = nx;
+  frog.y = ny;
+
+  if(frog.y < highestY){
+    score++;
+    highestY = frog.y;
+  }
+
+  checkCollision();
+});
+document.addEventListener("keyup",e=>keys[e.key]=false);
+
+/* collision */
+function checkCollision(){
+  const row = world[frog.y];
+
+  if(row.type==="road" && row.cars[frog.x]){
+    resetFrog();
+  }
+
+  if(row.type==="water"){
+    const log = row.logs[frog.x];
+    if(!log){
+      resetFrog();
+    }else{
+      frogOnLog = log;
+    }
+  }else{
+    frogOnLog = null;
+  }
+}
+
+/* movement */
+setInterval(()=>{
+  world.forEach(row=>{
+    if(row.type==="road"){
+      row.dir===1
+        ? row.cars.unshift(row.cars.pop())
+        : row.cars.push(row.cars.shift());
+    }
+
+    if(row.type==="water"){
+      row.dir===1
+        ? row.logs.unshift(row.logs.pop())
+        : row.logs.push(row.logs.shift());
+    }
+  });
+
+  if(frogOnLog){
+    const row = world[frog.y];
+    if(row.type==="water"){
+      const newX = row.logs.indexOf(frogOnLog);
+      if(newX === -1){
+        resetFrog();
+      }else{
+        frog.x = newX;
+      }
+    }
+  }
+
+  checkCollision();
+},500);
+
+/* draw */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  camY = frog.y - Math.floor(ROWS/2);
+  if(camY < 0) camY = 0;
+
+  while(camY < 4){
+    const prevRow = world.length ? world[0] : null;
+    world.unshift(genRow(false, prevRow));
+    camY++;
+    frog.y++;
+    highestY++;
+  }
+
+  for(let y=0;y<world.length;y++){
+    const sy = y - camY;
+    if(sy<0 || sy>=ROWS) continue;
+
+    const row = world[y];
+    for(let x=0;x<COLS;x++){
+      if(row.type==="water"){
+        const wimg = waterFrame ? water1Img : water2Img;
+        ctx.drawImage(wimg,x*TILE,sy*TILE,TILE,TILE);
+
+        const log = row.logs[x];
+        if(log){
+          const limg = log.v===1 ? log1Img : log2Img;
+          ctx.drawImage(limg,x*TILE,sy*TILE,TILE,TILE);
+        }
+        continue;
+      }
+
+      ctx.drawImage(grassImg,x*TILE,sy*TILE,TILE,TILE);
+      if(row.type==="grass" && row.rocks[x]){
+  ctx.drawImage(rockImg, x*TILE, sy*TILE, TILE, TILE);
+}
+
+      if(row.type==="grass" && row.trees[x]){
+        ctx.drawImage(treeImg,x*TILE,sy*TILE,TILE,TILE);
+      }
+
+      if(row.type==="road"){
+        const road = row.dir===1 ? roadDownImg : roadUpImg;
+        ctx.drawImage(road,x*TILE,sy*TILE,TILE,TILE);
+        if(row.cars[x]){
+          ctx.drawImage(truckImg,x*TILE,sy*TILE,TILE,TILE);
+        }
+      }
+    }
+  }
+
+  const fimg = frog.dead ? frogDeadImg : frogImg;
+  ctx.drawImage(
+    fimg,
+    frog.x*TILE,
+    (frog.y-camY)*TILE,
+    TILE,TILE
+  );
+
+  ctx.fillStyle="#bd0000";
+  ctx.fillText(score,4,12);
+  ctx.font = "12px monospace";
+
+
+  requestAnimationFrame(draw);
+}
+
+/* boot */
+let loaded=0;
+[
+  frogImg,frogDeadImg,grassImg,
+  roadUpImg,roadDownImg,truckImg,
+  treeImg,water1Img,water2Img,
+  log1Img,log2Img
+].forEach(i=>{
+  i.onload=()=>{
+    loaded++;
+    if(loaded===11) draw();
+  };
+});
+</script>
+
+
+
+</body>
+</html>
